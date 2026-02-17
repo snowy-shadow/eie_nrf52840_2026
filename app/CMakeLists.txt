@@ -7,8 +7,10 @@
 cmake_minimum_required(VERSION 3.13.1)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
-project(app LANGUAGES C)
+set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
+
+project(app LANGUAGES CXX C)
 
 zephyr_include_directories(src)
 
-target_sources(app PRIVATE src/main.c)
+target_sources(app PRIVATE src/main.cpp)
