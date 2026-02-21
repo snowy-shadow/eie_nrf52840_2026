@@ -13,4 +13,9 @@ project(app LANGUAGES CXX C)
 
 zephyr_include_directories(src)
 
-target_sources(app PRIVATE src/main.cpp)
+target_include_directories(${CMAKE_PROJECT_NAME}
+PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+add_subdirectory(src)

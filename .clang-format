@@ -1,0 +1,56 @@
+AlignAfterOpenBracket: Align
+AlignArrayOfStructures: Right
+AlignConsecutiveAssignments: AcrossComments
+AlignConsecutiveBitFields: AcrossComments
+AlignConsecutiveMacros: AcrossComments
+AlignEscapedNewlines: Left
+AlignOperands: Align
+AlignTrailingComments: true
+AllowShortBlocksOnASingleLine: Always
+AllowShortFunctionsOnASingleLine: All
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: false
+BinPackParameters: false
+BitFieldColonSpacing: Both
+BreakBeforeBraces: Allman
+BreakBeforeConceptDeclarations: true
+BreakConstructorInitializers: AfterColon
+BreakInheritanceList: AfterComma
+Cpp11BracedListStyle: true
+ColumnLimit: 120
+EmptyLineBeforeAccessModifier: Always
+FixNamespaceComments: true
+AccessModifierOffset: -4
+IndentAccessModifiers: false
+IndentCaseLabels: true
+IndentExternBlock: NoIndent
+IndentGotoLabels: false
+IndentPPDirectives: BeforeHash
+IndentRequires: true
+IndentWidth: 4
+IndentWrappedFunctionNames: true
+LambdaBodyIndentation: Signature
+NamespaceIndentation: None
+PackConstructorInitializers: NextLine
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+ReflowComments: true
+SortIncludes: Never
+SortUsingDeclarations: true
+SpaceAfterCStyleCast: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: true
+TabWidth: 4
+UseTab: Never
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterControlStatement: Always
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: true
+  BeforeWhile: true
