@@ -1,8 +1,9 @@
 #pragma once
 
-#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <zephyr/bluetooth/gatt.h>
 
 namespace ble
@@ -10,24 +11,8 @@ namespace ble
 class Controller
 {
 public:
-    // Enum for keys
-    enum Key : uint8_t
-    {
-        KeyA = 0,
-        KeyB,
-        KeyC,
-        KeyD,
-        KeyE,
-        KeyF,
-        KeyG,
-        KeyH,
-        // Add more keys up to 31
-        KeyCount
-    };
-
-public:
-    // Returns an array of currently pressed keys
-    std::array<Key, KeyCount> GetPressedKeys() const;
+    // Returns the most recent single key press, if one is pending.
+    std::optional<uint8_t> TakeKeyPress();
 
     // Callback for BLE GATT write
     ssize_t KeyWriteCb(struct bt_conn* conn,
@@ -58,7 +43,13 @@ private:
     // Private constructor for singleton
     Controller() = default;
 
-    using KeyType = uint32_t;
-    std::atomic<KeyType> LastKeysBuffer {0};
+    static bool IsLowerAscii(uint8_t key_value);
+
+    using KeyWireType = std::byte;
+    using PendingKeyType = int16_t;
+
+    static constexpr PendingKeyType NoKeyPress = -1;
+
+    std::atomic<PendingKeyType> PendingKeyPress {NoKeyPress};
 };
 } // namespace ble

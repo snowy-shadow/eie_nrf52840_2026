@@ -1,6 +1,6 @@
 #include "Controller.h"
-#include <bit>
-#include <bitset>
+
+#include <zephyr/sys/printk.h>
 
 namespace ble
 {
@@ -12,7 +12,7 @@ static constexpr bt_uuid_128 ControllerCharcUUID =
 
 // automagically registered by declaration
 BT_GATT_SERVICE_DEFINE(ControllerSrvc,
-                       BT_GATT_PRIMARY_SERVICE(&ControllerSrvcUUID),
+                       BT_GATT_PRIMARY_SERVICE(&ControllerSrvcUUID.uuid),
                        BT_GATT_CHARACTERISTIC(
                            &ControllerCharcUUID.uuid,
                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
@@ -34,31 +34,42 @@ ssize_t Controller::KeyWriteCb(struct bt_conn* /*conn*/,
                                uint16_t offset,
                                uint8_t /*flags*/)
 {
-    if (offset != 0 || len > sizeof(KeyType))
+    if (offset != 0)
     {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
     }
 
-    LastKeysBuffer = std::bit_cast<KeyType>(buf);
+    if (len < sizeof(KeyWireType))
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    const uint8_t KeyValue = std::to_integer<uint8_t>(*static_cast<const KeyWireType*>(buf));
+    if (!IsLowerAscii(KeyValue))
+    {
+        printk("controller write rejected: 0x%02x len=%u\n", KeyValue, len);
+        return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+    }
+
+    PendingKeyPress.store(static_cast<PendingKeyType>(KeyValue), std::memory_order_relaxed);
+    printk("controller key received: %c (0x%02x) len=%u\n", KeyValue, KeyValue, len);
     return len;
 }
 
-std::array<Controller::Key, Controller::KeyCount> Controller::GetPressedKeys() const
+std::optional<uint8_t> Controller::TakeKeyPress()
 {
-    std::array<Key, KeyCount> Pressed {};
-    KeyType Keys = LastKeysBuffer.load(std::memory_order_relaxed);
-    std::bitset<32> Bits(Keys);
-
-    size_t Index = 0;
-    for (size_t i = 0; i < KeyCount; ++i)
+    const PendingKeyType KeyValue = PendingKeyPress.exchange(NoKeyPress, std::memory_order_relaxed);
+    if (KeyValue == NoKeyPress)
     {
-        if (Bits.test(i))
-        {
-            Pressed[Index++] = static_cast<Key>(i);
-        }
+        return std::nullopt;
     }
 
-    return Pressed;
+    return static_cast<uint8_t>(KeyValue);
+}
+
+bool Controller::IsLowerAscii(uint8_t key_value)
+{
+    return key_value >= 'a' && key_value <= 'z';
 }
 
 bt_gatt_service& Controller::GetService() const

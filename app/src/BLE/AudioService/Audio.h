@@ -3,6 +3,7 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
+#include <zephyr/kernel.h>
 
 #include <atomic>
 #include <cstddef>
@@ -16,14 +17,22 @@ public:
     /** Called when a client writes the CCCD (enable/disable notifications) */
     void OnCccChanged(const struct bt_gatt_attr* attr, uint16_t value);
 
+    /** Queue the built-in song for transmission. */
+    bool Start();
+
     /** Called when a connection is established; binds conn to this service. */
     void OnConnected(struct bt_conn* conn);
+
+    /** Called when the active connection is disconnected. */
+    void OnDisconnected(struct bt_conn* conn);
 
     /** Update stored MTU (called by BLE manager after successful exchange) */
     void SetMtu(uint16_t mtu);
 
     /** Get reference to the registered GATT service */
     bt_gatt_service& GetService() const;
+
+    static void BeginSong(k_work* work);
 
 public:
     // Access the singleton instance
@@ -44,10 +53,16 @@ protected:
     void Send(const uint8_t* data, size_t len);
 
 private:
+    static constexpr size_t NotifyWindow = CONFIG_BT_ATT_TX_COUNT;
+
+    static void OnNotifyComplete(struct bt_conn* conn, void* user_data);
+
     // Private constructor for singleton
     AudioService();
 
-    std::atomic<uint16_t> AudioMTU {23};
+    std::atomic<uint16_t> AudioMTU {20};
+    std::atomic<bool> NotificationsEnabled {false};
     struct bt_conn* audio_conn {nullptr};
+    struct k_sem NotifyCredits;
 };
 } // namespace ble
