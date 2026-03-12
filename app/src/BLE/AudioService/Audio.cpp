@@ -4,7 +4,7 @@
 #include <zephyr/sys/printk.h>
 #include <cstring>
 
-#include "song.h"
+#include "assets/song.h"
 
 static k_work_delayable SendAudio;
 static k_work_q AudioWorkQueue;

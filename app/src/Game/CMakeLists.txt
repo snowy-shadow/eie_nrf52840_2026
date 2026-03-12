@@ -6,6 +6,7 @@
 
 cmake_minimum_required(VERSION 3.13.1)
 
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE main.cpp)
-add_subdirectory(BLE)
-add_subdirectory(Game)
+target_sources(${CMAKE_PROJECT_NAME}
+PRIVATE
+  Graphic.cpp
+)
