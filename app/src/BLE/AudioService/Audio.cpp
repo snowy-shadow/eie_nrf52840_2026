@@ -4,8 +4,6 @@
 #include <zephyr/sys/printk.h>
 #include <cstring>
 
-#include "assets/song.h"
-
 static k_work_delayable SendAudio;
 static k_work_q AudioWorkQueue;
 K_THREAD_STACK_DEFINE(AudioWorkQueueStack, CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE);
@@ -39,7 +37,7 @@ AudioService::AudioService() : audio_conn(nullptr)
     k_sem_init(&NotifyCredits, NotifyWindow, NotifyWindow);
 }
 
-bool AudioService::Start()
+bool AudioService::Start(const uint8_t* data, size_t len)
 {
     if (!audio_conn)
     {
@@ -53,6 +51,15 @@ bool AudioService::Start()
         return false;
     }
 
+    if (!data || len == 0)
+    {
+        printk("cannot start audio with null or empty data\n");
+        return false;
+    }
+
+    pending_data = data;
+    pending_len  = len;
+
     const int err = k_work_reschedule_for_queue(&AudioWorkQueue, &SendAudio, K_NO_WAIT);
     if (err < 0)
     {
@@ -63,7 +70,11 @@ bool AudioService::Start()
     return true;
 }
 
-void AudioService::BeginSong(k_work*) { AudioService::GetInstance().Send(song, song_len); }
+void AudioService::BeginSong(k_work*)
+{
+    AudioService& svc = AudioService::GetInstance();
+    svc.Send(svc.pending_data, svc.pending_len);
+}
 
 void AudioService::OnNotifyComplete(struct bt_conn*, void* user_data)
 {
@@ -159,10 +170,10 @@ void AudioService::Send(const uint8_t* data, size_t len)
          * central therefore observes "ten packets queued" and then nothing.
          */
         bt_gatt_notify_params NotifyParams {};
-        NotifyParams.attr = &AudioSrvc.attrs[2];
-        NotifyParams.data = &data[offset];
-        NotifyParams.len = chunk_len;
-        NotifyParams.func = AudioService::OnNotifyComplete;
+        NotifyParams.attr      = &AudioSrvc.attrs[2];
+        NotifyParams.data      = &data[offset];
+        NotifyParams.len       = chunk_len;
+        NotifyParams.func      = AudioService::OnNotifyComplete;
         NotifyParams.user_data = this;
 
         int err = bt_gatt_notify_cb(audio_conn, &NotifyParams);

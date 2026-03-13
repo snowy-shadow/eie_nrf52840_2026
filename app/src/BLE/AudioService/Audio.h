@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace ble
 {
@@ -17,8 +18,8 @@ public:
     /** Called when a client writes the CCCD (enable/disable notifications) */
     void OnCccChanged(const struct bt_gatt_attr* attr, uint16_t value);
 
-    /** Queue the built-in song for transmission. */
-    bool Start();
+    /** Queue the given audio data for transmission. */
+    bool Start(const uint8_t* data, size_t len);
 
     /** Called when a connection is established; binds conn to this service. */
     void OnConnected(struct bt_conn* conn);
@@ -64,5 +65,7 @@ private:
     std::atomic<bool> NotificationsEnabled {false};
     struct bt_conn* audio_conn {nullptr};
     struct k_sem NotifyCredits;
+    const uint8_t* pending_data {nullptr};
+    size_t pending_len {0};
 };
 } // namespace ble

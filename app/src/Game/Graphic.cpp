@@ -2,7 +2,9 @@
 
 #include <lvgl.h>
 #include <zephyr/drivers/display.h>
-#include "lv_data_obj.h"
+#include <zephyr/sys/printk.h>
+#include "SlotMachine/slot_machine_logic.h"
+#include "SlotMachine/slot_machine.h"
 
 namespace Graphic
 {
@@ -11,21 +13,28 @@ static lv_obj_t* screen = nullptr;
 
 bool Init()
 {
-    lv_init();
     bool Status = device_is_ready(display_dev);
     screen = lv_screen_active();
     Status &= (screen != nullptr);
 
-    if(Status)
+    if(!Status)
     {
-        /* make sure the display isn't blanked (it defaults to blanked) */
-        display_blanking_off(display_dev);
+        return false;
     }
-    return Status;
+    /* make sure the display isn't blanked (it defaults to blanked) */
+    display_blanking_off(display_dev);
+    printk("Graphic: create_gui\n");
+    create_slot_machine_gui();
+    printk("Graphic: sm_init\n");
+    slot_machine_initialize(lv_tick_get());
+    printk("Graphic: done\n");
+
+    return true;
 }
 
 void Render()
 {
     lv_timer_handler();
+    slot_machine_step_animation(lv_tick_get());
 }
 }

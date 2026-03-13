@@ -9,4 +9,6 @@ cmake_minimum_required(VERSION 3.13.1)
 target_sources(${CMAKE_PROJECT_NAME}
 PRIVATE
   Graphic.cpp
+  SlotMachine/slot_machine.cpp
+  SlotMachine/slot_machine_logic.cpp
 )
