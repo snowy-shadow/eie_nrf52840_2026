@@ -1,4 +1,5 @@
 from io import BytesIO
+from collections import deque
 from queue import Queue
 from threading import Condition, Event, Lock, Thread
 
@@ -15,6 +16,11 @@ class AudioReceiver:
         2: np.int16,
         4: np.int32,
     }
+    _SAMPLE_SCALE = {
+        1: float(np.iinfo(np.int8).max),
+        2: float(np.iinfo(np.int16).max),
+        4: float(np.iinfo(np.int32).max),
+    }
     
     def __init__(self):
         self.audio_queue = Queue()
@@ -24,17 +30,19 @@ class AudioReceiver:
         self.queue_cond = Condition()
         self.stop_event = Event()
 
-        self.chunk_ms = 140
-        self.prebuffer_chunks = 22
+        self.chunk_ms = 100
+        self.prebuffer_chunks = 6
         self.playback_batch_chunks = 5
-        self.min_decode_bytes = 16384
+        self.min_decode_bytes = 4096
         self.tail_keep_bytes = 8192
         self.next_decode_skip_ms = 0
 
         self.playback_lock = Lock()
+        self.playback_cond = Condition(self.playback_lock)
+        self.swapchain_buffers = 4
         self.active_pcm = None
         self.active_pos = 0
-        self.staging_pcm = None
+        self.ready_pcm = deque()
 
     def handle_notification(self, sender, data: bytearray):
         """BLE notification callback — appends received bytes to the MP3 buffer."""
@@ -62,6 +70,9 @@ class AudioReceiver:
         with self.queue_cond:
             self.queue_cond.notify_all()
 
+        with self.playback_cond:
+            self.playback_cond.notify_all()
+
     def _decoder_loop(self):
         while not self.stop_event.is_set():
             with self.buffer_cond:
@@ -85,14 +96,14 @@ class AudioReceiver:
                 dtype = self._SAMPLE_DTYPE.get(decode_audio.sample_width)
                 if dtype is None:
                     raise ValueError(f"unsupported sample width: {decode_audio.sample_width}")
+                scale = self._SAMPLE_SCALE[decode_audio.sample_width]
 
                 pcm_i = np.frombuffer(decode_audio.raw_data, dtype=dtype)
                 if pcm_i.size == 0:
-                    print("decoder produced no chunks yet")
                     continue
 
                 pcm = pcm_i.astype(np.float32)
-                pcm /= float(np.iinfo(dtype).max)
+                pcm /= scale
                 pcm = pcm.reshape((-1, decode_audio.channels))
 
                 chunk_samples = max(1, int((decode_audio.frame_rate * self.chunk_ms) / 1000))
@@ -115,7 +126,7 @@ class AudioReceiver:
                     else:
                         self.next_decode_skip_ms = len(audio)
             except Exception as exc:
-                print(f"decode waiting for more data: {exc}")
+            except Exception:
                 with self.buffer_cond:
                     previous_size = len(self.mp3_buffer)
                     self.buffer_cond.wait_for(
@@ -139,7 +150,11 @@ class AudioReceiver:
                 if next_rate != rate or next_pcm.shape[1] != channels:
                     break
 
-            batch.append(self.audio_queue.get()[0])
+                # consume under the same lock to avoid TOCTOU between peek and get
+                self.audio_queue.queue.popleft()
+                self.audio_queue.not_full.notify()
+
+            batch.append(next_pcm)
 
         if len(batch) > 1:
             return np.concatenate(batch, axis=0)
@@ -147,24 +162,19 @@ class AudioReceiver:
         return first_pcm
 
     def _stream_callback(self, outdata, frames, time_info, status):
-        del time_info
-        if status:
-            print(f"stream status: {status}")
-
+        del time_info, status
         outdata.fill(0.0)
 
         with self.playback_lock:
             written = 0
             while written < frames:
                 if self.active_pcm is None or self.active_pos >= len(self.active_pcm):
-                    if self.staging_pcm is None:
+                    if not self.ready_pcm:
                         break
 
-                    self.active_pcm = self.staging_pcm
-                    self.staging_pcm = None
+                    self.active_pcm = self.ready_pcm.popleft()
                     self.active_pos = 0
-                    with self.queue_cond:
-                        self.queue_cond.notify_all()
+                    self.playback_cond.notify_all()
 
                 available = len(self.active_pcm) - self.active_pos
                 take = min(available, frames - written)
@@ -190,12 +200,14 @@ class AudioReceiver:
 
         if src_rate != dst_rate and len(pcm) > 1:
             dst_len = max(1, int(round((len(pcm) * dst_rate) / src_rate)))
-            src_idx = np.arange(len(pcm), dtype=np.float32)
             dst_idx = np.linspace(0, len(pcm) - 1, dst_len, dtype=np.float32)
-            converted = np.empty((dst_len, dst_channels), dtype=np.float32)
-            for channel in range(dst_channels):
-                converted[:, channel] = np.interp(dst_idx, src_idx, pcm[:, channel])
-            pcm = converted
+            left_idx = np.floor(dst_idx).astype(np.int32)
+            right_idx = np.minimum(left_idx + 1, len(pcm) - 1)
+            frac = (dst_idx - left_idx).astype(np.float32)
+            pcm = (
+                pcm[left_idx] * (1.0 - frac)[:, None]
+                + pcm[right_idx] * frac[:, None]
+            )
 
         return pcm.astype(np.float32, copy=False)
 
@@ -216,7 +228,7 @@ class AudioReceiver:
         with self.playback_lock:
             self.active_pcm = pcm
             self.active_pos = 0
-            self.staging_pcm = None
+            self.ready_pcm.clear()
 
         with sd.OutputStream(
             samplerate=rate,
@@ -226,26 +238,15 @@ class AudioReceiver:
             blocksize=0,
         ):
             while not self.stop_event.is_set():
-                with self.playback_lock:
-                    staging_full = self.staging_pcm is not None
-
-                if staging_full:
-                    with self.queue_cond:
-                        self.queue_cond.wait(timeout=0.01)
-                    continue
-
                 with self.queue_cond:
                     self.queue_cond.wait_for(
-                        lambda: self.stop_event.is_set() or not self.audio_queue.empty(),
-                        timeout=0.1,
+                        lambda: self.stop_event.is_set() or not self.audio_queue.empty()
                     )
 
                     if self.stop_event.is_set():
                         return
 
-                if self.audio_queue.empty():
-                    continue
-
+                # get() is outside queue_cond to avoid nesting queue_cond -> audio_queue.mutex
                 next_pcm, next_rate = self.audio_queue.get()
                 next_pcm = self._drain_compatible_batch(next_pcm, next_rate)
                 if next_rate != rate or next_pcm.shape[1] != channels:
@@ -259,11 +260,13 @@ class AudioReceiver:
                 if len(next_pcm) == 0:
                     continue
 
-                while not self.stop_event.is_set():
-                    with self.playback_lock:
-                        if self.staging_pcm is None:
-                            self.staging_pcm = next_pcm
-                            break
+                with self.playback_cond:
+                    self.playback_cond.wait_for(
+                        lambda: self.stop_event.is_set()
+                        or len(self.ready_pcm) < (self.swapchain_buffers - 1)
+                    )
 
-                    with self.queue_cond:
-                        self.queue_cond.wait(timeout=0.01)
+                    if self.stop_event.is_set():
+                        return
+
+                    self.ready_pcm.append(next_pcm)
