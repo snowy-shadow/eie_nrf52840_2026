@@ -1,14 +1,6 @@
 import asyncio
 import struct
-import sys
-
 from pynput import keyboard
-
-try:
-    import HIServices
-except ImportError:
-    HIServices = None
-
 
 class ControllerSender:
     CONTROLLER_UUID = "3f9a2c71-8d44-4e6b-9a52-1b7c3d9eaf11"
@@ -57,10 +49,13 @@ class ControllerSender:
         if key_value is None:
             return
 
-        if self._loop is not None and self._client is not None:
-            self._loop.call_soon_threadsafe(
+        # Capture locals atomically; stop() (asyncio thread) can race and null these fields
+        loop = self._loop
+        client = self._client
+        if loop is not None and client is not None:
+            loop.call_soon_threadsafe(
                 asyncio.create_task,
-                self._send_keypress(self._client, key_value),
+                self._send_keypress(client, key_value),
             )
 
     def _disconnect(self):

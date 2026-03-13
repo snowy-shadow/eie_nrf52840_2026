@@ -1,12 +1,16 @@
 from io import BytesIO
 from collections import deque
+import logging
 from queue import Queue
 from threading import Condition, Event, Lock, Thread
+from time import monotonic
 
 import numpy as np
 import sounddevice as sd
 from pydub import AudioSegment
 
+
+logger = logging.getLogger(__name__)
 
 class AudioReceiver:
     AUDIO_UUID = "a1b2c3d4-1122-3344-5566-778899aabbcd"
@@ -29,17 +33,23 @@ class AudioReceiver:
         self.buffer_cond = Condition(self.buffer_lock)
         self.queue_cond = Condition()
         self.stop_event = Event()
+        self.decode_event = Event()
 
-        self.chunk_ms = 100
-        self.prebuffer_chunks = 6
-        self.playback_batch_chunks = 5
-        self.min_decode_bytes = 4096
+        self.chunk_ms = 10
+        self.prebuffer_chunks = 1
+        self.prebuffer_max_wait_s = 0.1
+        self.playback_batch_chunks = 1
+        self.min_decode_bytes = 768
+        self.decode_trigger_bytes = 128
+        self.decode_coalesce_s = 0.01
         self.tail_keep_bytes = 8192
         self.next_decode_skip_ms = 0
+        self._decode_last_buffer_size = 0
+        self._decode_last_signal_t = 0.0
 
         self.playback_lock = Lock()
         self.playback_cond = Condition(self.playback_lock)
-        self.swapchain_buffers = 4
+        self.swapchain_buffers = 3
         self.active_pcm = None
         self.active_pos = 0
         self.ready_pcm = deque()
@@ -49,9 +59,23 @@ class AudioReceiver:
         if self.stop_event.is_set():
             return
 
+        signal_decode = False
         with self.buffer_cond:
             self.mp3_buffer.extend(data)
+            new_size = len(self.mp3_buffer)
+            now = monotonic()
+            grew_enough = (new_size - self._decode_last_buffer_size) >= self.decode_trigger_bytes
+            if (
+                new_size >= self.min_decode_bytes
+                and (grew_enough or (now - self._decode_last_signal_t) >= self.decode_coalesce_s)
+            ):
+                self._decode_last_signal_t = now
+                self._decode_last_buffer_size = new_size
+                signal_decode = True
             self.buffer_cond.notify_all()
+
+        if signal_decode:
+            self.decode_event.set()
 
     def start(self):
         Thread(target=self._decoder_loop, daemon=True).start()
@@ -63,6 +87,7 @@ class AudioReceiver:
     def stop(self):
         self.stop_event.set()
         sd.stop()
+        self.decode_event.set()
 
         with self.buffer_cond:
             self.buffer_cond.notify_all()
@@ -75,15 +100,16 @@ class AudioReceiver:
 
     def _decoder_loop(self):
         while not self.stop_event.is_set():
+            # Event-driven decode wakeup from BLE notifications.
+            self.decode_event.wait(timeout=0.5)
+            self.decode_event.clear()
+
+            if self.stop_event.is_set():
+                return
+
             with self.buffer_cond:
-                self.buffer_cond.wait_for(
-                    lambda: self.stop_event.is_set()
-                    or len(self.mp3_buffer) >= self.min_decode_bytes
-                )
-
-                if self.stop_event.is_set():
-                    return
-
+                if len(self.mp3_buffer) < self.min_decode_bytes:
+                    continue
                 data = bytes(self.mp3_buffer)
 
             try:
@@ -125,17 +151,12 @@ class AudioReceiver:
                         self.mp3_buffer.extend(tail)
                     else:
                         self.next_decode_skip_ms = len(audio)
+                    # Keep draining available buffered data without waiting for new BLE packets.
+                    if len(self.mp3_buffer) >= self.min_decode_bytes:
+                        self.decode_event.set()
             except Exception as exc:
-            except Exception:
-                with self.buffer_cond:
-                    previous_size = len(self.mp3_buffer)
-                    self.buffer_cond.wait_for(
-                        lambda: self.stop_event.is_set()
-                        or len(self.mp3_buffer) > previous_size
-                    )
-
-                    if self.stop_event.is_set():
-                        return
+                logger.debug("MP3 decode failed; waiting for more data: %s", exc)
+                continue
 
     def _drain_compatible_batch(self, first_pcm, rate):
         batch = [first_pcm]
@@ -212,13 +233,18 @@ class AudioReceiver:
         return pcm.astype(np.float32, copy=False)
 
     def _audio_player(self):
+        start_wait = monotonic()
         with self.queue_cond:
-            self.queue_cond.wait_for(
-                lambda: self.stop_event.is_set()
-                or self.audio_queue.qsize() >= self.prebuffer_chunks
-            )
+            while not self.stop_event.is_set():
+                queued = self.audio_queue.qsize()
+                waited = monotonic() - start_wait
+                if queued >= self.prebuffer_chunks:
+                    break
+                if queued > 0 and waited >= self.prebuffer_max_wait_s:
+                    break
+                self.queue_cond.wait(timeout=0.1)
 
-            if self.stop_event.is_set():
+            if self.stop_event.is_set() or self.audio_queue.empty():
                 return
 
         pcm, rate = self.audio_queue.get()
@@ -229,44 +255,46 @@ class AudioReceiver:
             self.active_pcm = pcm
             self.active_pos = 0
             self.ready_pcm.clear()
+        try:
+            with sd.OutputStream(
+                samplerate=rate,
+                channels=channels,
+                dtype="float32",
+                callback=self._stream_callback,
+                blocksize=0,
+            ):
+                while not self.stop_event.is_set():
+                    with self.queue_cond:
+                        self.queue_cond.wait_for(
+                            lambda: self.stop_event.is_set() or not self.audio_queue.empty()
+                        )
 
-        with sd.OutputStream(
-            samplerate=rate,
-            channels=channels,
-            dtype="float32",
-            callback=self._stream_callback,
-            blocksize=0,
-        ):
-            while not self.stop_event.is_set():
-                with self.queue_cond:
-                    self.queue_cond.wait_for(
-                        lambda: self.stop_event.is_set() or not self.audio_queue.empty()
-                    )
+                        if self.stop_event.is_set():
+                            return
 
-                    if self.stop_event.is_set():
-                        return
+                    # get() is outside queue_cond to avoid nesting queue_cond -> audio_queue.mutex
+                    next_pcm, next_rate = self.audio_queue.get()
+                    next_pcm = self._drain_compatible_batch(next_pcm, next_rate)
+                    if next_rate != rate or next_pcm.shape[1] != channels:
+                        next_pcm = self._convert_pcm_to_stream_format(
+                            next_pcm,
+                            src_rate=next_rate,
+                            dst_rate=rate,
+                            dst_channels=channels,
+                        )
 
-                # get() is outside queue_cond to avoid nesting queue_cond -> audio_queue.mutex
-                next_pcm, next_rate = self.audio_queue.get()
-                next_pcm = self._drain_compatible_batch(next_pcm, next_rate)
-                if next_rate != rate or next_pcm.shape[1] != channels:
-                    next_pcm = self._convert_pcm_to_stream_format(
-                        next_pcm,
-                        src_rate=next_rate,
-                        dst_rate=rate,
-                        dst_channels=channels,
-                    )
+                    if len(next_pcm) == 0:
+                        continue
 
-                if len(next_pcm) == 0:
-                    continue
+                    with self.playback_cond:
+                        self.playback_cond.wait_for(
+                            lambda: self.stop_event.is_set()
+                            or len(self.ready_pcm) < (self.swapchain_buffers - 1)
+                        )
 
-                with self.playback_cond:
-                    self.playback_cond.wait_for(
-                        lambda: self.stop_event.is_set()
-                        or len(self.ready_pcm) < (self.swapchain_buffers - 1)
-                    )
+                        if self.stop_event.is_set():
+                            return
 
-                    if self.stop_event.is_set():
-                        return
-
-                    self.ready_pcm.append(next_pcm)
+                        self.ready_pcm.append(next_pcm)
+        except Exception as exc:
+            logger.error("Audio output stream failed: %s", exc)
