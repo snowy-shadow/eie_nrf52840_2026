@@ -1,13 +1,14 @@
 import asyncio
 import signal
 
-from ble_module import run_ble
 from audio_module import AudioReceiver
-from controller_module import ControllerSender
+from ble_module import run_ble
+
+# from controller_module import ControllerSender
 
 # instantiate here so both notification map and lifecycle use same object
 audio_receiver = AudioReceiver()
-controller_sender = ControllerSender()
+# controller_sender = ControllerSender()
 
 notification_callbacks = {AudioReceiver.AUDIO_UUID: audio_receiver.handle_notification}
 
@@ -29,8 +30,8 @@ async def main():
     try:
         await run_ble(
             notification_callbacks,
-            on_connected=controller_sender.start,
-            on_cleanup=controller_sender.stop,
+            # on_connected=controller_sender.start,
+            # on_cleanup=controller_sender.stop,
             stop_event=shutdown_event,
         )
     finally:

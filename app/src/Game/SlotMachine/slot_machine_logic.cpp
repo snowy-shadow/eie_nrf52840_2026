@@ -15,7 +15,7 @@ constexpr uint32_t kInitialBaseBet      = 100;
 constexpr uint32_t kPrepareDelayMs      = 800;
 constexpr uint32_t kPrepareStepMs       = 150;
 constexpr uint32_t kReelShuffleStepMs   = 55;
-constexpr uint32_t kReelSpinDurationMs  = 1300;
+constexpr uint32_t kReelSpinDurationMs  = 800;
 constexpr uint32_t kReelSpinStaggerMs   = 200;
 constexpr uint32_t kRiskResultDisplayMs = 1200;
 

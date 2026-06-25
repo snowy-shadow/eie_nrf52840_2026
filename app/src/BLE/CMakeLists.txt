@@ -9,6 +9,6 @@ cmake_minimum_required(VERSION 3.13.1)
 target_sources(${CMAKE_PROJECT_NAME}
 PRIVATE
   BLE.cpp
-  ControllerService/Controller.cpp
+  # ControllerService/Controller.cpp
   AudioService/Audio.cpp
 )
