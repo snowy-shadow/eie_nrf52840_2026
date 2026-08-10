@@ -1,2 +1,9 @@
 zephyr_library()
-zephyr_library_sources_ifdef(CONFIG_GPIO btn.c)
+
+if(CONFIG_GPIO)
+  if(CONFIG_BOARD_NATIVE_SIM)
+    zephyr_library_sources(btn_sim.c)
+  else()
+    zephyr_library_sources(btn.c)
+  endif()
+endif()

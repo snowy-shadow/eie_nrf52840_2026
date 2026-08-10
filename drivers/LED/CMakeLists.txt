@@ -1,2 +1,9 @@
 zephyr_library()
-zephyr_library_sources_ifdef(CONFIG_GPIO led.c)
+
+if(CONFIG_GPIO)
+  if(CONFIG_BOARD_NATIVE_SIM)
+    zephyr_library_sources(led_sim.c)
+  else()
+    zephyr_library_sources(led.c)
+  endif()
+endif()
